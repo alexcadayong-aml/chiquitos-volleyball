@@ -284,11 +284,6 @@ function ReserveModal({ game, userId, onReserve, onClose }) {
     return { confirmed, waitlisted, isFull, spotsLeft: isLibero ? "∞" : Math.max(0, pos.slots - confirmed) };
   };
 
-  // check which positions are full to unlock libero
-  const nonLiberoFull = game.positions.filter(p => p.key !== "libero").every(p => {
-    const { isFull } = getStatus(p);
-    return isFull;
-  });
   const anyNonLiberoFull = game.positions.filter(p => p.key !== "libero").some(p => getStatus(p).isFull);
 
   return (
@@ -683,7 +678,6 @@ function ProfilePage({ currentUser, store }) {
               <div style={{ display: "grid", gap: 10 }}>
                 {DEFAULT_POSITIONS.map(pos => {
                   const selected = hasPos(pos.key);
-                  const lc = selected ? levelColors[selected.level] : null;
                   return (
                     <div key={pos.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: selected ? pos.color + "0d" : COLORS.surfaceAlt, border: `1.5px solid ${selected ? pos.color + "55" : COLORS.border}`, borderRadius: 10 }}>
                       <input type="checkbox" checked={!!selected} onChange={() => togglePos(pos.key)} style={{ width: 16, height: 16, cursor: "pointer", accentColor: pos.color }} />
@@ -1167,7 +1161,6 @@ function TeamsManager({ games, users, store }) {
   const [rounds, setRounds] = useState(2);
   const [setsToWin, setSetsToWin] = useState(2);
   const [scoreTarget, setScoreTarget] = useState(21);
-  const [dragging, setDragging] = useState(null);
   const [scoreModal, setScoreModal] = useState(null);
 
   const upcomingGames = games.filter(g => new Date(g.date + "T" + g.time) >= today).sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -1368,8 +1361,6 @@ function TeamsManager({ games, users, store }) {
                         {selectedGame.matches.filter(m => m.round === ri + 1).map(m => {
                           const tA = selectedGame.teams.find(t => t.id === m.teamA);
                           const tB = selectedGame.teams.find(t => t.id === m.teamB);
-                          const winsA = m.sets.filter(s => s.a > s.b).length;
-                          const winsB = m.sets.filter(s => s.b > s.a).length;
                           return (
                             <div key={m.id} style={{ ...STYLES.card, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                               <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, minWidth: 200 }}>
