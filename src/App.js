@@ -460,7 +460,6 @@ function LoginPage({login,games,guestJoin}){
               <div style={{marginBottom:12}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Email</label><input style={STYLES.input} type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="you@email.com" autoFocus/></div>
               <div style={{marginBottom:20}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Password</label><input style={STYLES.input} type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="••••••••"/></div>
               <button onClick={handleLogin} style={{...STYLES.btn.primary,width:"100%",padding:"12px",fontSize:15}} disabled={loading}>{loading?"Signing in…":"Sign in"}</button>
-              <div style={{marginTop:14,padding:"11px 13px",background:COLORS.surfaceAlt,borderRadius:8,fontSize:12,color:COLORS.textMuted}}><strong>Demo:</strong> admin@chiquitos.ph / admin123 &nbsp;|&nbsp; ana@email.com / pass123</div>
               <p style={{margin:"14px 0 0",fontSize:13,color:COLORS.textMuted,textAlign:"center"}}>Not a member? <button onClick={()=>{setPanel("guest");setError("");}} style={{background:"none",border:"none",color:COLORS.guest,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:13}}>Join as Guest →</button></p>
             </div>
           </div>
