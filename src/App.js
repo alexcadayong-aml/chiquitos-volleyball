@@ -87,6 +87,7 @@ function useStore(){
   const[users,       setUsers]      =useState([]);
   const[guests,      setGuests]     =useState([]);
   const[games,       setGames]      =useState([]);
+  const[venues,      setVenues]     =useState([]);
   const[currentUser, setCurrentUser]=useState(null);
   const[loading,     setLoading]    =useState(true);
   const[toast,       setToast]      =useState(null);
@@ -109,7 +110,7 @@ function useStore(){
   }),[]);
 
   const shapeUser=useCallback(u=>({
-    id:u.id, name:u.name, email:u.email, password:u.password, role:u.role,
+    id:u.id, name:u.name, email:u.email, username:u.username||"", password:u.password, role:u.role,
     joined:u.joined, avatar:u.avatar||u.name.slice(0,2).toUpperCase(),
     positions:u.positions||[], remarkTags:u.remark_tags||[], remarkNotes:u.remark_notes||"",
   }),[]);
@@ -117,28 +118,32 @@ function useStore(){
   // ── load all data ──
   const loadAll=useCallback(async()=>{
     const {supabase}=await import('./supabase.js');
-    const[{data:usersData},{data:guestsData},{data:gamesData},{data:resData}]=await Promise.all([
+    const[{data:usersData},{data:guestsData},{data:gamesData},{data:resData},{data:venuesData}]=await Promise.all([
       supabase.from('users').select('*'),
       supabase.from('guests').select('*'),
       supabase.from('games').select('*').order('date',{ascending:true}),
       supabase.from('reservations').select('*'),
+      supabase.from('venues').select('*').order('name',{ascending:true}),
     ]);
-    const shaped=(resData||[]).map(shapeRes);
-    const shapedGames=(gamesData||[]).map(g=>shapeGame(g,shaped.filter(r=>r.gameId===g.id||shaped.filter(x=>x).find(x=>x))));
-    // attach reservations to games
     const gamesWithRes=(gamesData||[]).map(g=>shapeGame(g,(resData||[]).filter(r=>r.game_id===g.id).map(shapeRes)));
     setUsers((usersData||[]).map(shapeUser));
     setGuests((guestsData||[]).map(g=>({id:g.id,name:g.name,contact:g.contact,level:g.level,joinedAt:g.joined_at})));
     setGames(gamesWithRes);
+    setVenues(venuesData||[]);
     setLoading(false);
   },[shapeGame,shapeRes,shapeUser]);
 
   useEffect(()=>{loadAll();},[loadAll]);
 
   // ── auth ──
-  const login=async(email,password)=>{
+  const login=async(identifier,password)=>{
     const {supabase}=await import('./supabase.js');
-    const{data,error}=await supabase.from('users').select('*').eq('email',email).eq('password',password).single();
+    // try email first, then username
+    let {data,error}=await supabase.from('users').select('*').eq('email',identifier).eq('password',password).single();
+    if(error||!data){
+      const res=await supabase.from('users').select('*').eq('username',identifier).eq('password',password).single();
+      data=res.data; error=res.error;
+    }
     if(error||!data)return false;
     setCurrentUser(shapeUser(data));
     return true;
@@ -233,8 +238,9 @@ function useStore(){
   const addMember=async(member)=>{
     const {supabase}=await import('./supabase.js');
     if(users.find(u=>u.email===member.email)){showToast("Email already exists.","error");return false;}
+    if(member.username&&users.find(u=>u.username===member.username)){showToast("Username already taken.","error");return false;}
     const avatar=member.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase();
-    await supabase.from('users').insert({name:member.name,email:member.email,password:member.password,role:"member",avatar,positions:member.positions||[],remark_tags:[],remark_notes:""});
+    await supabase.from('users').insert({name:member.name,email:member.email,username:member.username||null,password:member.password,role:"member",avatar,positions:member.positions||[],remark_tags:[],remark_notes:""});
     showToast("Member added!");await loadAll();return true;
   };
   const removeMember=async(id)=>{
@@ -283,13 +289,30 @@ function useStore(){
     showToast("Score updated!");await loadAll();
   };
 
+  // ── venues ──
+  const addVenue=async(v)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('venues').insert({name:v.name,address:v.address,contact_person:v.contactPerson,contact_number:v.contactNumber,price_per_hour:v.pricePerHour,notes:v.notes||""});
+    showToast("Venue added!");await loadAll();
+  };
+  const updateVenue=async(id,v)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('venues').update({name:v.name,address:v.address,contact_person:v.contactPerson,contact_number:v.contactNumber,price_per_hour:v.pricePerHour,notes:v.notes||""}).eq('id',id);
+    showToast("Venue updated.");await loadAll();
+  };
+  const deleteVenue=async(id)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('venues').delete().eq('id',id);
+    showToast("Venue deleted.");await loadAll();
+  };
+
   const getReservationName=(r)=>{
     if(r.userId){const u=users.find(x=>x.id===r.userId);return{name:u?.name||"Unknown",avatar:u?.avatar||"??",isGuest:false,contact:u?.email};}
     const g=guests.find(x=>x.id===r.guestId);
     return{name:g?.name||"Guest",avatar:(g?.name||"G").slice(0,2).toUpperCase(),isGuest:true,contact:g?.contact};
   };
 
-  return{users,guests,games,currentUser,loading,toast,login,logout,guestJoin,addGame,updateGame,deleteGame,reserve,cancelReservation,uploadProof,confirmPayment,rejectPayment,addMember,removeMember,toggleRole,updateProfile,saveTeams,saveMatches,updateMatchScore,getReservationName,showToast};
+  return{users,guests,games,venues,currentUser,loading,toast,login,logout,guestJoin,addGame,updateGame,deleteGame,reserve,cancelReservation,uploadProof,confirmPayment,rejectPayment,addMember,removeMember,toggleRole,updateProfile,saveTeams,saveMatches,updateMatchScore,addVenue,updateVenue,deleteVenue,getReservationName,showToast};
 }
 // ─── UI HELPERS ───────────────────────────────────────────────────────────────
 
@@ -457,7 +480,7 @@ function LoginPage({login,games,guestJoin}){
             </div>
             <div style={{padding:"16px 24px 24px"}}>
               {error&&<div style={{background:COLORS.dangerLight,color:COLORS.danger,padding:"10px 14px",borderRadius:8,fontSize:13,marginBottom:14}}>{error}</div>}
-              <div style={{marginBottom:12}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Email</label><input style={STYLES.input} type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="you@email.com" autoFocus/></div>
+              <div style={{marginBottom:12}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Email or Username</label><input style={STYLES.input} type="text" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="email@example.com or username" autoFocus/></div>
               <div style={{marginBottom:20}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Password</label><input style={STYLES.input} type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="••••••••"/></div>
               <button onClick={handleLogin} style={{...STYLES.btn.primary,width:"100%",padding:"12px",fontSize:15}} disabled={loading}>{loading?"Signing in…":"Sign in"}</button>
               <p style={{margin:"14px 0 0",fontSize:13,color:COLORS.textMuted,textAlign:"center"}}>Not a member? <button onClick={()=>{setPanel("guest");setError("");}} style={{background:"none",border:"none",color:COLORS.guest,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:13}}>Join as Guest →</button></p>
@@ -995,6 +1018,7 @@ function AddMemberModal({onClose,onSave}){
         <div style={{display:"grid",gap:12}}>
           <p style={{margin:0,fontWeight:700,fontSize:13,color:COLORS.textMuted,textTransform:"uppercase",letterSpacing:0.5}}>Account Details</p>
           <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Full Name</label><input style={STYLES.input} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="Juan dela Cruz"/></div>
+          <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Username <span style={{color:COLORS.textMuted,fontWeight:400}}>(optional)</span></label><input style={STYLES.input} value={form.username||""} onChange={e=>set("username",e.target.value)} placeholder="juanvc"/></div>
           <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Email</label><input style={STYLES.input} type="email" value={form.email} onChange={e=>set("email",e.target.value)} placeholder="juan@email.com"/></div>
           <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Password</label><input style={STYLES.input} type="password" value={form.password} onChange={e=>set("password",e.target.value)} placeholder="Temporary password"/></div>
         </div>
@@ -1568,11 +1592,96 @@ function MyPayments({games,currentUser,store}){
   );
 }
 
+// ─── VENUE DIRECTORY ─────────────────────────────────────────────────────────
+
+function VenueDirectory({venues,store}){
+  const[showForm,setShowForm]=useState(false);
+  const[editVenue,setEditVenue]=useState(null);
+  const[search,setSearch]=useState("");
+  const EMPTY={name:"",address:"",contactPerson:"",contactNumber:"",pricePerHour:"",notes:""};
+  const[form,setForm]=useState(EMPTY);
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  const filtered=venues.filter(v=>v.name.toLowerCase().includes(search.toLowerCase())||v.address?.toLowerCase().includes(search.toLowerCase()));
+
+  const openAdd=()=>{setForm(EMPTY);setEditVenue(null);setShowForm(true);};
+  const openEdit=v=>{setForm({name:v.name,address:v.address||"",contactPerson:v.contact_person||"",contactNumber:v.contact_number||"",pricePerHour:v.price_per_hour||"",notes:v.notes||""});setEditVenue(v);setShowForm(true);};
+  const handleSave=()=>{
+    if(!form.name.trim())return;
+    if(editVenue) store.updateVenue(editVenue.id,form);
+    else store.addVenue(form);
+    setShowForm(false);
+  };
+
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <h2 style={{margin:0,fontSize:22,fontWeight:700,color:COLORS.text}}>Venue Directory</h2>
+        <button onClick={openAdd} style={STYLES.btn.primary}>+ Add Venue</button>
+      </div>
+      <p style={{margin:"0 0 14px",fontSize:13,color:COLORS.textMuted}}>Courts and facilities around Cubao and surrounding areas.</p>
+      <input style={{...STYLES.input,marginBottom:14}} placeholder="Search venues…" value={search} onChange={e=>setSearch(e.target.value)}/>
+
+      {filtered.length===0&&(
+        <div style={{...STYLES.card,textAlign:"center",padding:"32px 20px"}}>
+          <div style={{fontSize:32,marginBottom:10}}>🏟️</div>
+          <p style={{color:COLORS.textMuted,fontSize:14}}>No venues yet. Add your first court!</p>
+        </div>
+      )}
+
+      <div style={{display:"grid",gap:14}}>
+        {filtered.map(v=>(
+          <div key={v.id} style={STYLES.card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+              <div style={{flex:1,minWidth:200}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  <span style={{fontSize:18}}>🏟️</span>
+                  <h3 style={{margin:0,fontSize:17,fontWeight:700,color:COLORS.text}}>{v.name}</h3>
+                </div>
+                <div style={{display:"grid",gap:6}}>
+                  {v.address&&<div style={{display:"flex",gap:8,alignItems:"flex-start"}}><span style={{fontSize:13,color:COLORS.textMuted,minWidth:16}}>📍</span><span style={{fontSize:13,color:COLORS.text}}>{v.address}</span></div>}
+                  {v.contact_person&&<div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{fontSize:13,color:COLORS.textMuted,minWidth:16}}>👤</span><span style={{fontSize:13,color:COLORS.text}}>{v.contact_person}</span></div>}
+                  {v.contact_number&&<div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{fontSize:13,color:COLORS.textMuted,minWidth:16}}>📞</span><span style={{fontSize:13,color:COLORS.text}}>{v.contact_number}</span></div>}
+                  {v.price_per_hour&&<div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{fontSize:13,color:COLORS.textMuted,minWidth:16}}>💰</span><span style={{fontSize:13,color:COLORS.text}}>₱{v.price_per_hour}/hour</span></div>}
+                  {v.notes&&<div style={{display:"flex",gap:8,alignItems:"flex-start",marginTop:4}}><span style={{fontSize:13,color:COLORS.textMuted,minWidth:16}}>📌</span><span style={{fontSize:13,color:COLORS.textMuted,fontStyle:"italic"}}>{v.notes}</span></div>}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>openEdit(v)} style={{...STYLES.btn.secondary,padding:"7px 14px",fontSize:13}}>Edit</button>
+                <button onClick={()=>store.deleteVenue(v.id)} style={{...STYLES.btn.danger,padding:"7px 14px"}}>Delete</button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showForm&&(
+        <Modal title={editVenue?"Edit Venue":"Add New Venue"} onClose={()=>setShowForm(false)}>
+          <div style={{display:"grid",gap:14}}>
+            <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Court Name *</label><input style={STYLES.input} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Alonte Sports Arena"/></div>
+            <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Address</label><input style={STYLES.input} value={form.address} onChange={e=>set("address",e.target.value)} placeholder="Street, Barangay, City"/></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Contact Person</label><input style={STYLES.input} value={form.contactPerson} onChange={e=>set("contactPerson",e.target.value)} placeholder="Name"/></div>
+              <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Contact Number</label><input style={STYLES.input} value={form.contactNumber} onChange={e=>set("contactNumber",e.target.value)} placeholder="09XXXXXXXXX"/></div>
+            </div>
+            <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Price per Hour (₱)</label><input style={STYLES.input} type="number" min={0} value={form.pricePerHour} onChange={e=>set("pricePerHour",e.target.value)} placeholder="e.g. 1500"/></div>
+            <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:5}}>Notes</label><textarea style={{...STYLES.input,resize:"vertical",minHeight:70}} value={form.notes} onChange={e=>set("notes",e.target.value)} placeholder="Parking, facilities, rules, etc."/></div>
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:4}}>
+              <button onClick={()=>setShowForm(false)} style={STYLES.btn.secondary}>Cancel</button>
+              <button onClick={handleSave} style={{...STYLES.btn.primary,opacity:form.name.trim()?1:0.4}}>{editVenue?"Save changes":"Add Venue"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── LAYOUT ───────────────────────────────────────────────────────────────────
 
 function Layout({currentUser,logout,children,tab,setTab}){
   const tabs=currentUser?.role==="admin"
-    ?[{key:"schedule",label:"📅 Schedule"},{key:"payments",label:"💳 Payments"},{key:"members",label:"👥 Members"},{key:"teams",label:"🏐 Teams"}]
+    ?[{key:"schedule",label:"📅 Schedule"},{key:"payments",label:"💳 Payments"},{key:"members",label:"👥 Members"},{key:"teams",label:"🏐 Teams"},{key:"venues",label:"🏟️ Venues"}]
     :[{key:"browse",label:"🏐 Games"},{key:"myGames",label:"📋 My Reservations"},{key:"myPayments",label:"💳 Payments"},{key:"profile",label:"👤 Profile"}];
   return(
     <div style={{minHeight:"100vh",background:COLORS.bg,fontFamily:"'DM Sans',sans-serif"}}>
@@ -1638,6 +1747,7 @@ export default function App(){
             {tab==="payments"&&<PaymentsManager games={store.games} getReservationName={store.getReservationName} store={store}/>}
             {tab==="members" &&<MembersManager  users={store.users} guests={store.guests} currentUser={store.currentUser} store={store}/>}
             {tab==="teams"   &&<TeamsManager    games={store.games} users={store.users} getReservationName={store.getReservationName} store={store}/>}
+            {tab==="venues"  &&<VenueDirectory  venues={store.venues} store={store}/>}
           </>
         ):(
           <>
