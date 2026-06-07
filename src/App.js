@@ -234,21 +234,80 @@ function Modal({title,onClose,children,wide}){
 
 // ─── LOGIN PAGE ───────────────────────────────────────────────────────────────
 
+function PublicGameCard({game}){
+  const confirmedCount=game.reservations.filter(r=>r.status==="confirmed").length;
+  const waitlistCount =game.reservations.filter(r=>r.status==="waitlist").length;
+  const totalSlots    =game.positions.filter(p=>p.key!=="libero").reduce((s,p)=>s+p.slots,0);
+  return(
+    <div style={{...STYLES.card,marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+        <div style={{flex:1,minWidth:200}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <h3 style={{margin:0,fontSize:16,fontWeight:700,color:COLORS.text}}>{game.title}</h3>
+            {game.allowGuests&&<span style={{fontSize:11,background:COLORS.guestLight,color:COLORS.guest,padding:"2px 8px",borderRadius:10,fontWeight:600}}>Guests welcome</span>}
+          </div>
+          <div style={{display:"flex",gap:14,marginTop:7,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,color:COLORS.textMuted}}>📅 {new Date(game.date).toLocaleDateString("en-PH",{weekday:"short",month:"short",day:"numeric"})} · {game.time}</span>
+            <span style={{fontSize:13,color:COLORS.textMuted}}>📍 {game.venue}</span>
+            <span style={{fontSize:13,color:COLORS.textMuted}}>₱{game.fee}</span>
+          </div>
+          <div style={{display:"flex",gap:12,marginTop:5}}>
+            <span style={{fontSize:13,color:COLORS.success,fontWeight:600}}>{confirmedCount}/{totalSlots} players confirmed</span>
+            {waitlistCount>0&&<span style={{fontSize:13,color:COLORS.info,fontWeight:600}}>{waitlistCount} on waitlist</span>}
+          </div>
+        </div>
+      </div>
+      {/* Position breakdown */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginTop:10}}>
+        {game.positions.map(pos=>{
+          const confirmed =game.reservations.filter(r=>r.position===pos.key&&r.status==="confirmed").length;
+          const waitlisted=game.reservations.filter(r=>r.position===pos.key&&r.status==="waitlist").length;
+          const isLib=pos.key==="libero";
+          const isFull=!isLib&&confirmed>=pos.slots;
+          const pct=isLib?0:Math.min(100,Math.round((confirmed/pos.slots)*100));
+          return(
+            <div key={pos.key} style={{background:COLORS.surfaceAlt,borderRadius:10,padding:"8px 10px",border:`1px solid ${isFull?pos.color+"55":COLORS.border}`}}>
+              <span style={{fontSize:11,fontWeight:700,color:pos.color,textTransform:"uppercase",letterSpacing:0.3}}>{pos.label.split(" ")[0]}</span>
+              {isFull&&<span style={{display:"block",fontSize:9,background:pos.color+"22",color:pos.color,padding:"1px 4px",borderRadius:8,fontWeight:700,marginTop:1}}>FULL</span>}
+              <div style={{marginTop:3,fontSize:15,fontWeight:800,color:COLORS.text}}>{confirmed}<span style={{fontSize:11,fontWeight:400,color:COLORS.textMuted}}>/{isLib?"∞":pos.slots}</span></div>
+              {!isLib&&<div style={{height:4,borderRadius:4,background:COLORS.border,marginTop:4,overflow:"hidden"}}><div style={{height:"100%",borderRadius:4,background:isFull?pos.color:pos.color+"99",width:`${pct}%`}}/></div>}
+              {waitlisted>0&&<div style={{fontSize:9,color:COLORS.info,marginTop:3}}>+{waitlisted} wait</div>}
+            </div>
+          );
+        })}
+      </div>
+      {/* Waitlist names */}
+      {waitlistCount>0&&(
+        <div style={{marginTop:8,padding:"8px 10px",background:COLORS.infoLight,borderRadius:8}}>
+          <p style={{margin:"0 0 4px",fontSize:11,fontWeight:700,color:COLORS.info}}>Waitlist ({waitlistCount})</p>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+            {game.reservations.filter(r=>r.status==="waitlist").sort((a,b)=>a.waitlistPos-b.waitlistPos).map((r,i)=>{
+              const pos=DEFAULT_POSITIONS.find(p=>p.key===r.position);
+              return<span key={i} style={{fontSize:11,background:COLORS.surface,border:`1px solid ${COLORS.border}`,padding:"1px 7px",borderRadius:20,color:COLORS.text}}>#{r.waitlistPos} <span style={{color:pos?.color,fontWeight:600}}>({pos?.label})</span></span>;
+            })}
+          </div>
+        </div>
+      )}
+      {game.notes&&<p style={{margin:"10px 0 0",fontSize:12,color:COLORS.textMuted,borderTop:`1px solid ${COLORS.border}`,paddingTop:8}}>📌 {game.notes}</p>}
+    </div>
+  );
+}
+
 function LoginPage({login,games,guestJoin}){
-  const[mode,setMode]=useState("login"); // login | guest
+  const[panel,setPanel]=useState(null); // null | "login" | "guest"
   const[email,setEmail]=useState("");
   const[password,setPassword]=useState("");
   const[error,setError]=useState("");
   const[loading,setLoading]=useState(false);
-  // guest state
-  const[selGame,setSelGame]=useState("");
   const[gName,setGName]=useState("");
   const[gContact,setGContact]=useState("");
+  const[selGame,setSelGame]=useState("");
   const[gPos,setGPos]=useState("");
   const[gLevel,setGLevel]=useState(1);
   const[gDone,setGDone]=useState(false);
 
-  const upcomingGuestGames=games.filter(g=>g.allowGuests&&new Date(g.date+"T"+g.time)>=today).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const upcoming=games.filter(g=>new Date(g.date+"T"+g.time)>=today).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const guestGames=upcoming.filter(g=>g.allowGuests);
 
   const handleLogin=()=>{
     setError("");
@@ -263,86 +322,131 @@ function LoginPage({login,games,guestJoin}){
     setGDone(true);
   };
 
+  const closePanel=()=>{setPanel(null);setError("");setEmail("");setPassword("");setGName("");setGContact("");setSelGame("");setGPos("");setGLevel(1);setGDone(false);};
+
   return(
-    <div style={{minHeight:"100vh",background:COLORS.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif",padding:16}}>
-      <div style={{width:"100%",maxWidth:420}}>
-        <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{width:64,height:64,borderRadius:16,background:COLORS.primary,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px",fontSize:28}}>🏐</div>
-          <h1 style={{margin:0,fontSize:26,fontWeight:800,color:COLORS.text}}>Chiquitos Volleyball</h1>
-          <p style={{color:COLORS.textMuted,margin:"6px 0 0",fontSize:14}}>Volleyball group management</p>
+    <div style={{minHeight:"100vh",background:COLORS.bg,fontFamily:"'DM Sans',sans-serif"}}>
+      {/* Header */}
+      <div style={{background:COLORS.primary,color:"#fff",padding:"0 24px",display:"flex",alignItems:"center",justifyContent:"space-between",height:60}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:22}}>🏐</span>
+          <span style={{fontWeight:800,fontSize:18,letterSpacing:-0.3}}>Chiquitos Volleyball</span>
         </div>
-
-        {/* Tab switcher */}
-        <div style={{display:"flex",background:COLORS.surfaceAlt,borderRadius:10,padding:4,marginBottom:20}}>
-          <button onClick={()=>{setMode("login");setError("");}} style={{flex:1,padding:"9px 0",borderRadius:8,border:"none",fontWeight:600,fontSize:14,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",background:mode==="login"?COLORS.surface:"transparent",color:mode==="login"?COLORS.primary:COLORS.textMuted,boxShadow:mode==="login"?"0 1px 4px rgba(0,0,0,0.1)":"none"}}>Member Sign In</button>
-          <button onClick={()=>{setMode("guest");setError("");}} style={{flex:1,padding:"9px 0",borderRadius:8,border:"none",fontWeight:600,fontSize:14,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",background:mode==="guest"?COLORS.surface:"transparent",color:mode==="guest"?COLORS.guest:COLORS.textMuted,boxShadow:mode==="guest"?"0 1px 4px rgba(0,0,0,0.1)":"none"}}>Join as Guest</button>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>{setPanel("login");setError("");}} style={{...STYLES.btn.secondary,padding:"8px 16px",fontSize:13,color:"#fff",border:"1.5px solid rgba(255,255,255,0.5)"}}>Sign In</button>
+          <button onClick={()=>{setPanel("guest");setError("");}} style={{...STYLES.btn.primary,padding:"8px 16px",fontSize:13,background:"rgba(255,255,255,0.15)"}}>Join as Guest</button>
         </div>
-
-        {mode==="login"&&(
-          <div style={STYLES.card}>
-            <p style={{margin:"0 0 16px",fontWeight:600,color:COLORS.text}}>Sign in to your account</p>
-            {error&&<div style={{background:COLORS.dangerLight,color:COLORS.danger,padding:"10px 14px",borderRadius:8,fontSize:13,marginBottom:14}}>{error}</div>}
-            <div style={{marginBottom:12}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Email</label><input style={STYLES.input} type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="you@email.com"/></div>
-            <div style={{marginBottom:20}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Password</label><input style={STYLES.input} type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="••••••••"/></div>
-            <button onClick={handleLogin} style={{...STYLES.btn.primary,width:"100%",padding:"12px",fontSize:15}} disabled={loading}>{loading?"Signing in…":"Sign in"}</button>
-            <div style={{marginTop:14,padding:"11px 13px",background:COLORS.surfaceAlt,borderRadius:8,fontSize:12,color:COLORS.textMuted}}><strong>Demo:</strong> admin@chiquitos.ph / admin123 &nbsp;|&nbsp; ana@email.com / pass123</div>
-          </div>
-        )}
-
-        {mode==="guest"&&!gDone&&(
-          <div style={STYLES.card}>
-            <p style={{margin:"0 0 4px",fontWeight:700,color:COLORS.text,fontSize:16}}>Join a Game as Guest</p>
-            <p style={{margin:"0 0 18px",fontSize:13,color:COLORS.textMuted}}>No account needed. Fill in your details and sign up for a game.</p>
-            {error&&<div style={{background:COLORS.dangerLight,color:COLORS.danger,padding:"10px 14px",borderRadius:8,fontSize:13,marginBottom:14}}>{error}</div>}
-            <div style={{display:"grid",gap:12}}>
-              <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Your Name</label><input style={STYLES.input} value={gName} onChange={e=>setGName(e.target.value)} placeholder="Juan dela Cruz"/></div>
-              <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Contact Number</label><input style={STYLES.input} value={gContact} onChange={e=>setGContact(e.target.value)} placeholder="09XXXXXXXXX"/></div>
-              <div>
-                <label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Select Game</label>
-                {upcomingGuestGames.length===0?<p style={{fontSize:13,color:COLORS.textMuted,padding:"10px 0"}}>No games currently open for guests.</p>:(
-                  <select style={{...STYLES.input}} value={selGame} onChange={e=>setSelGame(e.target.value)}>
-                    <option value="">Choose a game…</option>
-                    {upcomingGuestGames.map(g=><option key={g.id} value={g.id}>{g.title} — {new Date(g.date).toLocaleDateString("en-PH",{month:"short",day:"numeric"})}</option>)}
-                  </select>
-                )}
-              </div>
-              <div>
-                <label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:8}}>Position</label>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8}}>
-                  {DEFAULT_POSITIONS.map(pos=>(
-                    <button key={pos.key} onClick={()=>setGPos(pos.key)} style={{padding:"10px 8px",borderRadius:8,border:`2px solid ${gPos===pos.key?pos.color:COLORS.border}`,background:gPos===pos.key?pos.color+"15":COLORS.surface,color:gPos===pos.key?pos.color:COLORS.textMuted,fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>{pos.label}</button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:8}}>Skill Level</label>
-                <div style={{display:"flex",gap:10}}>
-                  {[1,2,3].map(lvl=>(
-                    <button key={lvl} onClick={()=>setGLevel(lvl)} style={{flex:1,padding:"12px",borderRadius:8,border:`2px solid ${gLevel===lvl?COLORS.primary:COLORS.border}`,background:gLevel===lvl?COLORS.primary:COLORS.surface,color:gLevel===lvl?"#fff":COLORS.textMuted,fontWeight:700,fontSize:18,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>{lvl}</button>
-                  ))}
-                </div>
-                <p style={{margin:"6px 0 0",fontSize:11,color:COLORS.textMuted}}>1 = beginner · 2 = intermediate · 3 = advanced</p>
-              </div>
-            </div>
-            <button onClick={handleGuestJoin} style={{...STYLES.btn.guest,width:"100%",padding:"12px",fontSize:15,marginTop:20}}>Sign Up as Guest</button>
-          </div>
-        )}
-
-        {mode==="guest"&&gDone&&(
-          <div style={STYLES.card}>
-            <div style={{textAlign:"center",padding:"10px 0"}}>
-              <div style={{fontSize:48,marginBottom:12}}>✅</div>
-              <h2 style={{margin:"0 0 8px",fontSize:20,fontWeight:800,color:COLORS.success}}>You're signed up!</h2>
-              <p style={{fontSize:14,color:COLORS.textMuted,marginBottom:20,lineHeight:1.6}}>Welcome, <strong>{gName}</strong>! Your spot has been reserved.</p>
-              <div style={{background:COLORS.warningLight,border:`1px solid ${COLORS.warning}33`,borderRadius:10,padding:"14px 16px",textAlign:"left",marginBottom:20}}>
-                <p style={{margin:"0 0 6px",fontWeight:700,fontSize:14,color:COLORS.warning}}>📋 Next Steps</p>
-                <p style={{margin:0,fontSize:13,color:COLORS.text,lineHeight:1.6}}>Contact the admin to settle your payment and confirm your reservation. You can reach out via the group chat or ask any member for the admin's contact.</p>
-              </div>
-              <button onClick={()=>{setGDone(false);setGName("");setGContact("");setSelGame("");setGPos("");setGLevel(1);setMode("login");}} style={{...STYLES.btn.secondary,width:"100%"}}>Back to Sign In</button>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Games list */}
+      <div style={{maxWidth:860,margin:"0 auto",padding:"28px 16px"}}>
+        <div style={{marginBottom:24}}>
+          <h2 style={{margin:"0 0 4px",fontSize:22,fontWeight:800,color:COLORS.text}}>Upcoming Games</h2>
+          <p style={{margin:0,fontSize:14,color:COLORS.textMuted}}>Sign in or join as guest to reserve a spot.</p>
+        </div>
+        {upcoming.length===0&&(
+          <div style={{...STYLES.card,textAlign:"center",padding:"40px 20px"}}>
+            <div style={{fontSize:36,marginBottom:12}}>📅</div>
+            <p style={{color:COLORS.textMuted,fontSize:15}}>No upcoming games scheduled yet. Check back soon!</p>
+          </div>
+        )}
+        {upcoming.map(g=><PublicGameCard key={g.id} game={g}/>)}
+
+        {/* CTA */}
+        <div style={{...STYLES.card,background:COLORS.primary,border:"none",textAlign:"center",padding:"28px 24px",marginTop:8}}>
+          <p style={{margin:"0 0 6px",fontWeight:800,fontSize:18,color:"#fff"}}>Want to join a game?</p>
+          <p style={{margin:"0 0 20px",fontSize:14,color:"rgba(255,255,255,0.75)"}}>Sign in if you're a member, or join as a guest — no account needed.</p>
+          <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+            <button onClick={()=>{setPanel("login");setError("");}} style={{...STYLES.btn.secondary,padding:"11px 28px",fontSize:14,color:"#fff",border:"1.5px solid rgba(255,255,255,0.6)"}}>Sign In as Member</button>
+            <button onClick={()=>{setPanel("guest");setError("");}} style={{background:"#fff",color:COLORS.primary,border:"none",borderRadius:8,padding:"11px 28px",fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'DM Sans',sans-serif"}}>Join as Guest</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Sign In Modal */}
+      {panel==="login"&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={e=>e.target===e.currentTarget&&closePanel()}>
+          <div style={{background:COLORS.surface,borderRadius:14,width:"100%",maxWidth:400,boxShadow:"0 8px 40px rgba(0,0,0,0.2)"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"20px 24px 0"}}>
+              <h3 style={{margin:0,fontSize:18,fontWeight:700,color:COLORS.text}}>Member Sign In</h3>
+              <button onClick={closePanel} style={{...STYLES.btn.ghost,fontSize:20,padding:"4px 10px"}}>×</button>
+            </div>
+            <div style={{padding:"16px 24px 24px"}}>
+              {error&&<div style={{background:COLORS.dangerLight,color:COLORS.danger,padding:"10px 14px",borderRadius:8,fontSize:13,marginBottom:14}}>{error}</div>}
+              <div style={{marginBottom:12}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Email</label><input style={STYLES.input} type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="you@email.com" autoFocus/></div>
+              <div style={{marginBottom:20}}><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Password</label><input style={STYLES.input} type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="••••••••"/></div>
+              <button onClick={handleLogin} style={{...STYLES.btn.primary,width:"100%",padding:"12px",fontSize:15}} disabled={loading}>{loading?"Signing in…":"Sign in"}</button>
+              <div style={{marginTop:14,padding:"11px 13px",background:COLORS.surfaceAlt,borderRadius:8,fontSize:12,color:COLORS.textMuted}}><strong>Demo:</strong> admin@chiquitos.ph / admin123 &nbsp;|&nbsp; ana@email.com / pass123</div>
+              <p style={{margin:"14px 0 0",fontSize:13,color:COLORS.textMuted,textAlign:"center"}}>Not a member? <button onClick={()=>{setPanel("guest");setError("");}} style={{background:"none",border:"none",color:COLORS.guest,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:13}}>Join as Guest →</button></p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Guest Join Modal */}
+      {panel==="guest"&&!gDone&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={e=>e.target===e.currentTarget&&closePanel()}>
+          <div style={{background:COLORS.surface,borderRadius:14,width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px rgba(0,0,0,0.2)"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"20px 24px 0"}}>
+              <h3 style={{margin:0,fontSize:18,fontWeight:700,color:COLORS.text}}>Join as Guest</h3>
+              <button onClick={closePanel} style={{...STYLES.btn.ghost,fontSize:20,padding:"4px 10px"}}>×</button>
+            </div>
+            <div style={{padding:"14px 24px 24px"}}>
+              <p style={{margin:"0 0 16px",fontSize:13,color:COLORS.textMuted}}>No account needed. Fill in your details to reserve a spot.</p>
+              {error&&<div style={{background:COLORS.dangerLight,color:COLORS.danger,padding:"10px 14px",borderRadius:8,fontSize:13,marginBottom:14}}>{error}</div>}
+              <div style={{display:"grid",gap:12}}>
+                <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Your Name</label><input style={STYLES.input} value={gName} onChange={e=>setGName(e.target.value)} placeholder="Juan dela Cruz" autoFocus/></div>
+                <div><label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Contact Number</label><input style={STYLES.input} value={gContact} onChange={e=>setGContact(e.target.value)} placeholder="09XXXXXXXXX"/></div>
+                <div>
+                  <label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:6}}>Select Game</label>
+                  {guestGames.length===0
+                    ?<p style={{fontSize:13,color:COLORS.textMuted,padding:"8px 0"}}>No games open for guests right now.</p>
+                    :<select style={STYLES.input} value={selGame} onChange={e=>setSelGame(e.target.value)}>
+                      <option value="">Choose a game…</option>
+                      {guestGames.map(g=><option key={g.id} value={g.id}>{g.title} — {new Date(g.date).toLocaleDateString("en-PH",{month:"short",day:"numeric"})}</option>)}
+                    </select>
+                  }
+                </div>
+                <div>
+                  <label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:8}}>Position</label>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:7}}>
+                    {DEFAULT_POSITIONS.map(pos=>(
+                      <button key={pos.key} onClick={()=>setGPos(pos.key)} style={{padding:"9px 6px",borderRadius:8,border:`2px solid ${gPos===pos.key?pos.color:COLORS.border}`,background:gPos===pos.key?pos.color+"15":COLORS.surface,color:gPos===pos.key?pos.color:COLORS.textMuted,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>{pos.label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{fontSize:13,fontWeight:500,color:COLORS.textMuted,display:"block",marginBottom:8}}>Skill Level</label>
+                  <div style={{display:"flex",gap:10}}>
+                    {[1,2,3].map(lvl=>(
+                      <button key={lvl} onClick={()=>setGLevel(lvl)} style={{flex:1,padding:"12px",borderRadius:8,border:`2px solid ${gLevel===lvl?COLORS.primary:COLORS.border}`,background:gLevel===lvl?COLORS.primary:COLORS.surface,color:gLevel===lvl?"#fff":COLORS.textMuted,fontWeight:700,fontSize:18,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>{lvl}</button>
+                    ))}
+                  </div>
+                  <p style={{margin:"5px 0 0",fontSize:11,color:COLORS.textMuted}}>1 = beginner · 2 = intermediate · 3 = advanced</p>
+                </div>
+              </div>
+              <button onClick={handleGuestJoin} style={{...STYLES.btn.guest,width:"100%",padding:"12px",fontSize:15,marginTop:18}}>Reserve Spot as Guest</button>
+              <p style={{margin:"12px 0 0",fontSize:13,color:COLORS.textMuted,textAlign:"center"}}>Already a member? <button onClick={()=>{setPanel("login");setError("");}} style={{background:"none",border:"none",color:COLORS.primary,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:13}}>Sign in →</button></p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Guest success modal */}
+      {panel==="guest"&&gDone&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:COLORS.surface,borderRadius:14,width:"100%",maxWidth:400,boxShadow:"0 8px 40px rgba(0,0,0,0.2)",padding:"32px 28px",textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:12}}>✅</div>
+            <h2 style={{margin:"0 0 8px",fontSize:20,fontWeight:800,color:COLORS.success}}>You're signed up!</h2>
+            <p style={{fontSize:14,color:COLORS.textMuted,marginBottom:20,lineHeight:1.6}}>Welcome, <strong>{gName}</strong>! Your spot has been reserved.</p>
+            <div style={{background:COLORS.warningLight,border:`1px solid ${COLORS.warning}33`,borderRadius:10,padding:"14px 16px",textAlign:"left",marginBottom:20}}>
+              <p style={{margin:"0 0 6px",fontWeight:700,fontSize:14,color:COLORS.warning}}>📋 Next Steps</p>
+              <p style={{margin:0,fontSize:13,color:COLORS.text,lineHeight:1.6}}>Contact the admin to settle your payment and confirm your reservation. You can reach out via the group chat or ask any member for the admin's contact.</p>
+            </div>
+            <button onClick={closePanel} style={{...STYLES.btn.secondary,width:"100%"}}>Back to Games</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
