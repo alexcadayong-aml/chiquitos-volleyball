@@ -84,128 +84,212 @@ const SEED_GUESTS=[];
 // ─── STORE ────────────────────────────────────────────────────────────────────
 
 function useStore(){
-  const[users,      setUsers]      =useState(SEED_USERS);
-  const[guests,     setGuests]     =useState(SEED_GUESTS);
-  const[games,      setGames]      =useState(SEED_GAMES);
-  const[currentUser,setCurrentUser]=useState(null);
-  const[guestSession,setGuestSess] =useState(null); // {guestId, name}
-  const[toast,      setToast]      =useState(null);
+  const[users,       setUsers]      =useState([]);
+  const[guests,      setGuests]     =useState([]);
+  const[games,       setGames]      =useState([]);
+  const[currentUser, setCurrentUser]=useState(null);
+  const[loading,     setLoading]    =useState(true);
+  const[toast,       setToast]      =useState(null);
 
   const showToast=useCallback((msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3200);},[]);
 
-  const login=(email,password)=>{
-    const user=users.find(u=>u.email===email&&u.password===password);
-    if(!user)return false;
-    setCurrentUser(user);
-    setGuestSess(null);
+  // ── helpers to shape DB rows into app format ──
+  const shapeGame=useCallback((g,reservations=[])=>({
+    id:g.id, title:g.title, date:g.date, time:g.time, venue:g.venue,
+    fee:g.fee, allowMultiple:g.allow_multiple, allowGuests:g.allow_guests,
+    notes:g.notes||"", positions:g.positions||DEFAULT_POSITIONS.map(p=>({...p})),
+    teams:g.teams||null, matches:g.matches||null, matchSettings:g.match_settings||null,
+    reservations,
+  }),[]);
+
+  const shapeRes=useCallback(r=>({
+    id:r.id, userId:r.user_id, guestId:r.guest_id, position:r.position,
+    level:r.level||1, status:r.status, paymentStatus:r.payment_status,
+    paymentProof:r.payment_proof, reservedAt:r.reserved_at, waitlistPos:r.waitlist_pos,
+  }),[]);
+
+  const shapeUser=useCallback(u=>({
+    id:u.id, name:u.name, email:u.email, password:u.password, role:u.role,
+    joined:u.joined, avatar:u.avatar||u.name.slice(0,2).toUpperCase(),
+    positions:u.positions||[], remarkTags:u.remark_tags||[], remarkNotes:u.remark_notes||"",
+  }),[]);
+
+  // ── load all data ──
+  const loadAll=useCallback(async()=>{
+    const {supabase}=await import('./supabase.js');
+    const[{data:usersData},{data:guestsData},{data:gamesData},{data:resData}]=await Promise.all([
+      supabase.from('users').select('*'),
+      supabase.from('guests').select('*'),
+      supabase.from('games').select('*').order('date',{ascending:true}),
+      supabase.from('reservations').select('*'),
+    ]);
+    const shaped=(resData||[]).map(shapeRes);
+    const shapedGames=(gamesData||[]).map(g=>shapeGame(g,shaped.filter(r=>r.gameId===g.id||shaped.filter(x=>x).find(x=>x))));
+    // attach reservations to games
+    const gamesWithRes=(gamesData||[]).map(g=>shapeGame(g,(resData||[]).filter(r=>r.game_id===g.id).map(shapeRes)));
+    setUsers((usersData||[]).map(shapeUser));
+    setGuests((guestsData||[]).map(g=>({id:g.id,name:g.name,contact:g.contact,level:g.level,joinedAt:g.joined_at})));
+    setGames(gamesWithRes);
+    setLoading(false);
+  },[shapeGame,shapeRes,shapeUser]);
+
+  useEffect(()=>{loadAll();},[loadAll]);
+
+  // ── auth ──
+  const login=async(email,password)=>{
+    const {supabase}=await import('./supabase.js');
+    const{data,error}=await supabase.from('users').select('*').eq('email',email).eq('password',password).single();
+    if(error||!data)return false;
+    setCurrentUser(shapeUser(data));
     return true;
   };
-  const logout=()=>{setCurrentUser(null);setGuestSess(null);};
+  const logout=()=>setCurrentUser(null);
 
-  // Guest sign up for a specific game
-  const guestJoin=(gameId,guestInfo,position,level)=>{
+  // ── guest join ──
+  const guestJoin=async(gameId,guestInfo,position,level)=>{
+    const {supabase}=await import('./supabase.js');
     const gId=`guest_${Date.now()}`;
-    const newGuest={id:gId,...guestInfo,level,joinedAt:new Date().toISOString()};
-    setGuests(prev=>[...prev,newGuest]);
-    // add reservation
-    setGames(prev=>prev.map(g=>{
-      if(g.id!==gameId)return g;
-      const pos=g.positions.find(p=>p.key===position);
-      const filled=g.reservations.filter(r=>r.position===position&&r.status==="confirmed").length;
-      const isLib=position==="libero";
-      const full=!isLib&&filled>=pos.slots;
-      const wPos=full?g.reservations.filter(r=>r.position===position&&r.status==="waitlist").length+1:null;
-      return{...g,reservations:[...g.reservations,{userId:null,guestId:gId,position,level,status:full?"waitlist":"confirmed",paymentStatus:"unpaid",paymentProof:null,reservedAt:new Date().toISOString(),waitlistPos:wPos}]};
-    }));
-    setGuestSess({guestId:gId,name:guestInfo.name,contact:guestInfo.contact});
+    await supabase.from('guests').insert({id:gId,name:guestInfo.name,contact:guestInfo.contact,level});
+    const game=games.find(g=>g.id===gameId);
+    const filled=(game?.reservations||[]).filter(r=>r.position===position&&r.status==="confirmed").length;
+    const pos=game?.positions.find(p=>p.key===position);
+    const isLib=position==="libero";
+    const full=!isLib&&filled>=(pos?.slots||99);
+    const wPos=full?(game?.reservations||[]).filter(r=>r.position===position&&r.status==="waitlist").length+1:null;
+    await supabase.from('reservations').insert({game_id:gameId,guest_id:gId,position,level,status:full?"waitlist":"confirmed",payment_status:"unpaid",waitlist_pos:wPos});
     showToast("You're signed up! Contact admin for payment details.");
+    await loadAll();
     return gId;
   };
 
-  const addGame   =g    =>{setGames(prev=>[{...g,id:Date.now(),reservations:[]},...prev]);showToast("Game scheduled!");};
-  const updateGame=(id,u)=>{setGames(prev=>prev.map(g=>g.id===id?{...g,...u}:g));showToast("Game updated.");};
-  const deleteGame=id   =>{setGames(prev=>prev.filter(g=>g.id!==id));showToast("Game deleted.");};
-
-  const reserve=(gameId,userId,position)=>{
-    setGames(prev=>prev.map(g=>{
-      if(g.id!==gameId)return g;
-      const pos=g.positions.find(p=>p.key===position);
-      const filled=g.reservations.filter(r=>r.position===position&&r.status==="confirmed").length;
-      const isLib=position==="libero";
-      const full=!isLib&&filled>=pos.slots;
-      const wPos=full?g.reservations.filter(r=>r.position===position&&r.status==="waitlist").length+1:null;
-      return{...g,reservations:[...g.reservations,{userId,guestId:null,position,status:full?"waitlist":"confirmed",paymentStatus:"unpaid",paymentProof:null,reservedAt:new Date().toISOString(),waitlistPos:wPos}]};
-    }));
-    showToast("Spot reserved! Upload your payment proof.");
+  // ── games ──
+  const addGame=async(g)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('games').insert({title:g.title,date:g.date,time:g.time,venue:g.venue,fee:g.fee,allow_multiple:g.allowMultiple,allow_guests:g.allowGuests,notes:g.notes,positions:g.positions});
+    showToast("Game scheduled!");await loadAll();
+  };
+  const updateGame=async(id,u)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('games').update({title:u.title,date:u.date,time:u.time,venue:u.venue,fee:u.fee,allow_multiple:u.allowMultiple,allow_guests:u.allowGuests,notes:u.notes,positions:u.positions}).eq('id',id);
+    showToast("Game updated.");await loadAll();
+  };
+  const deleteGame=async(id)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('games').delete().eq('id',id);
+    showToast("Game deleted.");await loadAll();
   };
 
-  const cancelReservation=(gameId,userId,guestId=null)=>{
-    setGames(prev=>prev.map(g=>{
-      if(g.id!==gameId)return g;
-      const match=r=>guestId?r.guestId===guestId:r.userId===userId;
-      const cancelled=g.reservations.find(match);
-      const updated=g.reservations.filter(r=>!match(r));
-      if(cancelled?.status==="confirmed"){
-        let wPos=1;
-        const promoted=updated.map(r=>{
-          if(r.position===cancelled.position&&r.status==="waitlist"){
-            const filledNow=updated.filter(x=>x.position===cancelled.position&&x.status==="confirmed").length;
-            const pos=g.positions.find(p=>p.key===cancelled.position);
-            if(filledNow<pos.slots)return{...r,status:"confirmed",waitlistPos:null};
-            return{...r,waitlistPos:wPos++};
-          }
-          return r;
-        });
-        return{...g,reservations:promoted};
+  // ── reservations ──
+  const reserve=async(gameId,userId,position)=>{
+    const {supabase}=await import('./supabase.js');
+    const game=games.find(g=>g.id===gameId);
+    const filled=(game?.reservations||[]).filter(r=>r.position===position&&r.status==="confirmed").length;
+    const pos=game?.positions.find(p=>p.key===position);
+    const isLib=position==="libero";
+    const full=!isLib&&filled>=(pos?.slots||99);
+    const wPos=full?(game?.reservations||[]).filter(r=>r.position===position&&r.status==="waitlist").length+1:null;
+    await supabase.from('reservations').insert({game_id:gameId,user_id:userId,position,status:full?"waitlist":"confirmed",payment_status:"unpaid",waitlist_pos:wPos});
+    showToast("Spot reserved! Upload your payment proof.");await loadAll();
+  };
+
+  const cancelReservation=async(gameId,userId,guestId=null)=>{
+    const {supabase}=await import('./supabase.js');
+    const game=games.find(g=>g.id===gameId);
+    const cancelled=game?.reservations.find(r=>guestId?r.guestId===guestId:r.userId===userId);
+    if(guestId) await supabase.from('reservations').delete().eq('game_id',gameId).eq('guest_id',guestId);
+    else await supabase.from('reservations').delete().eq('game_id',gameId).eq('user_id',userId);
+    // promote waitlist if cancelled was confirmed
+    if(cancelled?.status==="confirmed"){
+      const waitlist=(game?.reservations||[]).filter(r=>r.position===cancelled.position&&r.status==="waitlist").sort((a,b)=>a.waitlistPos-b.waitlistPos);
+      if(waitlist.length>0){
+        await supabase.from('reservations').update({status:"confirmed",waitlist_pos:null}).eq('id',waitlist[0].id);
+        for(let i=1;i<waitlist.length;i++) await supabase.from('reservations').update({waitlist_pos:i}).eq('id',waitlist[i].id);
       }
-      return{...g,reservations:updated};
-    }));
-    showToast("Reservation cancelled.");
+    }
+    showToast("Reservation cancelled.");await loadAll();
   };
 
-  const uploadProof   =(gId,uId,proof)=>{setGames(prev=>prev.map(g=>({...g,reservations:g.reservations.map(r=>r.userId===uId?{...r,paymentProof:proof,paymentStatus:"pending"}:r)})));showToast("Proof submitted!");};
-  const confirmPayment=(gId,uId,gsId=null)=>{
-    setGames(prev=>prev.map(g=>({...g,reservations:g.reservations.map(r=>(gsId?r.guestId===gsId:r.userId===uId)?{...r,paymentStatus:"paid"}:r)})));
-    showToast("Payment confirmed!");
-  };
-  const rejectPayment=(gId,uId,gsId=null)=>{
-    setGames(prev=>prev.map(g=>({...g,reservations:g.reservations.map(r=>(gsId?r.guestId===gsId:r.userId===uId)?{...r,paymentStatus:"unpaid",paymentProof:null}:r)})));
-    showToast("Payment rejected.","warning");
+  const uploadProof=async(gameId,userId,proof)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('reservations').update({payment_proof:proof,payment_status:"pending"}).eq('game_id',gameId).eq('user_id',userId);
+    showToast("Proof submitted!");await loadAll();
   };
 
-  const addMember=member=>{
+  const confirmPayment=async(gameId,userId,guestId=null)=>{
+    const {supabase}=await import('./supabase.js');
+    const q=supabase.from('reservations').update({payment_status:"paid"}).eq('game_id',gameId);
+    if(guestId) await q.eq('guest_id',guestId); else await q.eq('user_id',userId);
+    showToast("Payment confirmed!");await loadAll();
+  };
+
+  const rejectPayment=async(gameId,userId,guestId=null)=>{
+    const {supabase}=await import('./supabase.js');
+    const q=supabase.from('reservations').update({payment_status:"unpaid",payment_proof:null}).eq('game_id',gameId);
+    if(guestId) await q.eq('guest_id',guestId); else await q.eq('user_id',userId);
+    showToast("Payment rejected.","warning");await loadAll();
+  };
+
+  // ── members ──
+  const addMember=async(member)=>{
+    const {supabase}=await import('./supabase.js');
     if(users.find(u=>u.email===member.email)){showToast("Email already exists.","error");return false;}
-    setUsers(prev=>[...prev,{...member,id:Date.now(),role:"member",joined:fmt(today),avatar:member.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),remarkTags:[],remarkNotes:""}]);
-    showToast("Member added!");return true;
+    const avatar=member.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase();
+    await supabase.from('users').insert({name:member.name,email:member.email,password:member.password,role:"member",avatar,positions:member.positions||[],remark_tags:[],remark_notes:""});
+    showToast("Member added!");await loadAll();return true;
   };
-  const removeMember =id=>{setUsers(prev=>prev.filter(u=>u.id!==id));showToast("Member removed.");};
-  const toggleRole   =id=>{setUsers(prev=>prev.map(u=>u.id===id?{...u,role:u.role==="admin"?"member":"admin"}:u));showToast("Role updated.");};
-  const updateProfile=(id,updates)=>{setUsers(prev=>prev.map(u=>u.id===id?{...u,...updates}:u));setCurrentUser(prev=>prev?.id===id?{...prev,...updates}:prev);showToast("Profile updated!");};
-
-  const saveTeams       =(gId,teams)        =>{setGames(prev=>prev.map(g=>g.id===gId?{...g,teams}:g));showToast("Teams saved!");};
-  const saveMatches     =(gId,matches,sett) =>{setGames(prev=>prev.map(g=>g.id===gId?{...g,matches,matchSettings:sett}:g));showToast("Matches generated!");};
-  const updateMatchScore=(gId,mId,sets)     =>{
-    setGames(prev=>prev.map(g=>{
-      if(g.id!==gId)return g;
-      const stw=g.matchSettings?.setsToWin||2;
-      const matches=g.matches.map(m=>{
-        if(m.id!==mId)return m;
-        const wA=sets.filter(s=>s.a>s.b).length,wB=sets.filter(s=>s.b>s.a).length;
-        return{...m,sets,winner:wA>=stw?m.teamA:wB>=stw?m.teamB:null,played:wA>=stw||wB>=stw};
-      });
-      return{...g,matches};
-    }));
-    showToast("Score updated!");
+  const removeMember=async(id)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('users').delete().eq('id',id);
+    showToast("Member removed.");await loadAll();
+  };
+  const toggleRole=async(id)=>{
+    const {supabase}=await import('./supabase.js');
+    const user=users.find(u=>u.id===id);
+    await supabase.from('users').update({role:user.role==="admin"?"member":"admin"}).eq('id',id);
+    showToast("Role updated.");await loadAll();
+  };
+  const updateProfile=async(id,updates)=>{
+    const {supabase}=await import('./supabase.js');
+    const dbUpdates={};
+    if(updates.positions!==undefined) dbUpdates.positions=updates.positions;
+    if(updates.remarkTags!==undefined) dbUpdates.remark_tags=updates.remarkTags;
+    if(updates.remarkNotes!==undefined) dbUpdates.remark_notes=updates.remarkNotes;
+    await supabase.from('users').update(dbUpdates).eq('id',id);
+    setCurrentUser(prev=>prev?.id===id?{...prev,...updates}:prev);
+    showToast("Profile updated!");await loadAll();
   };
 
-  const getGuest=id=>guests.find(g=>g.id===id);
+  // ── teams & matches ──
+  const saveTeams=async(gameId,teams)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('games').update({teams}).eq('id',gameId);
+    showToast("Teams saved!");await loadAll();
+  };
+  const saveMatches=async(gameId,matches,settings)=>{
+    const {supabase}=await import('./supabase.js');
+    await supabase.from('games').update({matches,match_settings:settings}).eq('id',gameId);
+    showToast("Matches generated!");await loadAll();
+  };
+  const updateMatchScore=async(gameId,matchId,sets)=>{
+    const {supabase}=await import('./supabase.js');
+    const game=games.find(g=>g.id===gameId);
+    const stw=game?.matchSettings?.setsToWin||2;
+    const updatedMatches=(game?.matches||[]).map(m=>{
+      if(m.id!==matchId)return m;
+      const wA=sets.filter(s=>s.a>s.b).length,wB=sets.filter(s=>s.b>s.a).length;
+      return{...m,sets,winner:wA>=stw?m.teamA:wB>=stw?m.teamB:null,played:wA>=stw||wB>=stw};
+    });
+    await supabase.from('games').update({matches:updatedMatches}).eq('id',gameId);
+    showToast("Score updated!");await loadAll();
+  };
+
   const getReservationName=(r)=>{
     if(r.userId){const u=users.find(x=>x.id===r.userId);return{name:u?.name||"Unknown",avatar:u?.avatar||"??",isGuest:false,contact:u?.email};}
     const g=guests.find(x=>x.id===r.guestId);
     return{name:g?.name||"Guest",avatar:(g?.name||"G").slice(0,2).toUpperCase(),isGuest:true,contact:g?.contact};
   };
 
-  return{users,guests,games,currentUser,guestSession,toast,login,logout,guestJoin,addGame,updateGame,deleteGame,reserve,cancelReservation,uploadProof,confirmPayment,rejectPayment,addMember,removeMember,toggleRole,updateProfile,saveTeams,saveMatches,updateMatchScore,getGuest,getReservationName,showToast};
+  return{users,guests,games,currentUser,loading,toast,login,logout,guestJoin,addGame,updateGame,deleteGame,reserve,cancelReservation,uploadProof,confirmPayment,rejectPayment,addMember,removeMember,toggleRole,updateProfile,saveTeams,saveMatches,updateMatchScore,getReservationName,showToast};
 }
 // ─── UI HELPERS ───────────────────────────────────────────────────────────────
 
@@ -1529,6 +1613,15 @@ export default function App(){
   useEffect(()=>{
     if(store.currentUser)setTab(store.currentUser.role==="admin"?"schedule":"browse");
   },[store.currentUser]);
+
+  if(store.loading) return(
+    <div style={{minHeight:"100vh",background:COLORS.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:48,marginBottom:16}}>🏐</div>
+        <p style={{color:COLORS.textMuted,fontSize:16,fontWeight:500}}>Loading Chiquitos Volleyball…</p>
+      </div>
+    </div>
+  );
 
   if(!store.currentUser)return(
     <>
